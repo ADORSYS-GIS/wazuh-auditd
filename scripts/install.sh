@@ -90,7 +90,7 @@ else
     print_step_header 1 "Installing Auditd"
     info_message "Installing auditd and audispd-plugins..."
     maybe_sudo apt update > /dev/null 2>&1
-    maybe_sudo apt install auditd audispd-plugins -y > /dev/null || error_exit "Failed to install auditd packages"
+    maybe_sudo apt install auditd audispd-plugins -y > /dev/null 2>&1 || error_exit "Failed to install auditd packages"
     success_message "Auditd packages installed successfully."
 fi
 
