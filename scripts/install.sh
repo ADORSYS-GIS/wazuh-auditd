@@ -9,6 +9,7 @@ fi
 
 # Variables
 LOG_LEVEL=${LOG_LEVEL:-INFO}
+OSSEC_CONF_PATH="/var/ossec/etc/ossec.conf"
 
 # Define text formatting
 RED='\033[0;31m'
@@ -78,6 +79,20 @@ error_exit() {
     exit 1
 }
 
+remove_journald_config() {
+    if maybe_sudo grep -q "<log_format>journald</log_format>" "$OSSEC_CONF_PATH"; then
+        # Remove the entire journald localfile block
+        sed -i '/<localfile>/{:a;N;/<\/localfile>/!ba;/journald/d;}' "$OSSEC_CONF_PATH" || {
+                error_message "Error occurred while removing the journald localfile block."
+                return 1
+            }
+
+        info_message "The journald localfile configuration was removed successfully."
+    else
+        info_message "No journald localfile configuration found. No changes were made."
+    fi
+}
+
 # Check if running on Linux
 if [[ "$(uname)" != "Linux" ]]; then
     error_exit "This script is designed for Linux systems only."
@@ -114,7 +129,10 @@ info_message "Restarting auditd service to apply rules..."
 maybe_sudo systemctl restart auditd > /dev/null 2>&1  || error_exit "Failed to restart auditd service"
 success_message "Auditd service restarted successfully."
 
-print_step_header 6 "Verifying Installation"
+print_step_header 6 "Removing Journald Configuration"
+remove_journald_config
+
+print_step_header 7 "Verifying Installation"
 # Validate installation
 if maybe_sudo auditctl -l | grep -q "exfil"; then
     success_message "Exfiltration rules are loaded."
