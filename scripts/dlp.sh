@@ -6,9 +6,16 @@
 # -------------------------------------------------------------------------
 # Global Configuration & OS Detection
 # -------------------------------------------------------------------------
+
+# Set shell options
+if [ -n "$BASH_VERSION" ]; then
+    set -euo pipefail
+else
+    set -eu
+fi
+
 OS_NAME=$(uname)
 UNBLOCK_DURATION=${UNBLOCK_DURATION:-60}
-UNBLOCK_TIME=${UNBLOCK_TIME:-"now + 1 minute"}
 
 # Path configuration based on OS
 if [[ "$OS_NAME" == "Darwin" ]]; then

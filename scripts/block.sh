@@ -5,6 +5,14 @@
 # -------------------------------------------------------------------------
 # Global Configuration & OS Detection
 # -------------------------------------------------------------------------
+
+# Set shell options
+if [ -n "$BASH_VERSION" ]; then
+    set -euo pipefail
+else
+    set -eu
+fi
+
 OS_NAME=$(uname)
 
 if [[ "$OS_NAME" == "Darwin" ]]; then
