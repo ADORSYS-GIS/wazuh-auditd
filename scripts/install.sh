@@ -109,14 +109,20 @@ fi
 
 # Check dependencies
 print_step_header 1 "Installing Dependencies"
-for dep in auditctl augenrules jq util-linux; do
-    if ! command_exists "$dep"; then
-        info_message "Installing $dep..."
-        maybe_sudo apt update > /dev/null 2>&1
-        maybe_sudo apt install "$dep" -y > /dev/null 2>&1 || error_exit "Failed to install $dep"
-        success_message "$dep installed successfully."
-    fi
-done 
+maybe_sudo apt update > /dev/null 2>&1
+deps=("auditd:auditctl augenrules" "jq:jq" "util-linux:flock")
+for entry in "${deps[@]}"; do
+    pkg="${entry%%:*}"
+    cmds="${entry##*:}"
+    for cmd in $cmds; do
+        if command_exists "$cmd"; then
+            success_message "$pkg already installed... Skipping installation."
+            continue 2
+        fi
+    done
+    maybe_sudo apt install "$pkg" -y > /dev/null 2>&1 || error_exit "Failed to install $pkg"
+    success_message "$pkg installed successfully."
+done
 
 print_step_header 2 "Configuring Exfiltration Rules"
 info_message "Copying exfiltration rules to audit configuration..."
