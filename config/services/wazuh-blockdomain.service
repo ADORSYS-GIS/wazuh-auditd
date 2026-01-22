@@ -5,4 +5,4 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
-ExecStart=$BLOCK_SH
+ExecStart=/var/ossec/active-response/bin/block.sh
