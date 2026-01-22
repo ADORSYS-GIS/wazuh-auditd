@@ -60,7 +60,9 @@ command_exists() {
 }
 
 # Variables
-CONFIG_URL="https://raw.githubusercontent.com/ADORSYS-GIS/wazuh-auditd/refs/heads/feat/DLP/config"
+BASE_URL="https://raw.githubusercontent.com/ADORSYS-GIS/wazuh-auditd/refs/heads/feat/DLP"
+CONFIG_URL="${BASE_URL}/config"
+SCRIPTS_URL="${BASE_URL}/scripts"
 SYSTEMD_DIR="/etc/systemd/system"
 BIN_DIR="/var/ossec/active-response/bin"
 SERVICES=("wazuh-blockdomain.service" "wazuh-unblock.service")
@@ -119,7 +121,7 @@ done
 print_step_header 2 "Configuring Exfiltration Rules"
 info_message "Copying exfiltration rules to audit configuration..."
 maybe_sudo mkdir -p /etc/audit/rules.d/ > /dev/null 2>&1
-maybe_sudo curl -fsSL https://raw.githubusercontent.com/ADORSYS-GIS/wazuh-auditd/feat/install-configure/config/exfiltration.rules -o /etc/audit/rules.d/exfiltration.rules || error_message "Failed to copy exfiltration rules"
+maybe_sudo curl -fsSL "${CONFIG_URL}/exfiltration.rules" -o /etc/audit/rules.d/exfiltration.rules || error_message "Failed to copy exfiltration rules"
 
 print_step_header 3 "Enabling and Starting Auditd Service"
 info_message "Enabling and starting auditd service..."
@@ -168,10 +170,19 @@ maybe_sudo systemctl daemon-reload
 
 success_message "Active response services configured successfully."
 
-print_step_header 7 "Removing Journald Configuration"
+print_step_header 7 "Installing Active Response Scripts"
+info_message "Installing active response scripts..."
+maybe_sudo mkdir -p "$BIN_DIR" > /dev/null 2>&1
+maybe_sudo curl -fsSL "$SCRIPTS_URL/block.sh" -o "$BIN_DIR/block.sh" || error_message "Failed to install block.sh"
+maybe_sudo curl -fsSL "$SCRIPTS_URL/unblock.sh" -o "$BIN_DIR/unblock.sh" || error_message "Failed to install unblock.sh"
+maybe_sudo curl -fsSL "$SCRIPTS_URL/dlp.sh" -o "$BIN_DIR/dlp.sh" || error_message "Failed to install dlp.sh"
+maybe_sudo chmod +x "$BIN_DIR/block.sh" "$BIN_DIR/unblock.sh" "$BIN_DIR/dlp.sh"
+success_message "Active response scripts installed successfully."
+
+print_step_header 8 "Removing Journald Configuration"
 remove_journald_config
 
-print_step_header 8 "Verifying Installation"
+print_step_header 9 "Verifying Installation"
 # Validate installation
 if maybe_sudo auditctl -l | grep -q "exfil"; then
     success_message "Exfiltration rules are loaded."
@@ -199,6 +210,12 @@ else
     warn_message "$MISSING_UNITS active response configurations are missing."
 fi
 
-
+# Validate scripts
+info_message "Verifying active response scripts..."
+if [ -f "$BIN_DIR/block.sh" ] && [ -f "$BIN_DIR/unblock.sh" ] && [ -f "$BIN_DIR/dlp.sh" ]; then
+    success_message "All active response scripts are present in $BIN_DIR."
+else
+    warn_message "One or more active response scripts are missing from $BIN_DIR."
+fi
 
 success_message "Auditd installation and configuration complete!"
