@@ -2,8 +2,7 @@
 Description=Wazuh Active Response Block Domain Timer
 
 [Timer]
-OnBootSec=1min
-OnUnitActiveSec=1min
+OnCalendar=*-*-* *:*:30
 Persistent=true
 Unit=wazuh-blockdomain.service
 
