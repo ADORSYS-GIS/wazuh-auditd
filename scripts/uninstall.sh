@@ -9,6 +9,11 @@ fi
 
 # Variables
 LOG_LEVEL=${LOG_LEVEL:-INFO}
+OSSEC_CONF_PATH="/var/ossec/etc/ossec.conf"
+SYSTEMD_DIR="/etc/systemd/system"
+BIN_DIR="/var/ossec/active-response/bin"
+SERVICES=("wazuh-blockdomain.service" "wazuh-unblock.service")
+TIMERS=("wazuh-blockdomain.timer" "wazuh-unblock.timer")
 
 # Define text formatting
 RED='\033[0;31m'
@@ -96,34 +101,98 @@ info_message "Disabling auditd service..."
 maybe_sudo systemctl disable auditd > /dev/null 2>&1 || warn_message "Failed to disable auditd service"
 
 print_step_header 4 "Removing Active Response Services"
-info_message "Disabling and removing services..."
+info_message "Disabling and removing services and timers..."
 
-SERVER_FILES=("wazuh-blockdomain.service" "wazuh-unblock.service" "wazuh-blockdomain.timer" "wazuh-unblock.timer")
-SYSTEMD_DIR="/etc/systemd/system"
-
-for FILE in "${SERVER_FILES[@]}"; do
-    if [ -f "$SYSTEMD_DIR/$FILE" ]; then
-        info_message "Stopping and disabling $FILE..."
-        maybe_sudo systemctl stop "$FILE" > /dev/null 2>&1 || true
-        maybe_sudo systemctl disable "$FILE" > /dev/null 2>&1 || true
+remove_unit() {
+    local unit="$1"
+    if [ -f "${SYSTEMD_DIR}/${unit}" ]; then
+        info_message "Stopping and disabling ${unit}..."
+        maybe_sudo systemctl stop "${unit}" > /dev/null 2>&1 || true
+        maybe_sudo systemctl disable "${unit}" > /dev/null 2>&1 || true
         
-        info_message "Removing $FILE..."
-        maybe_sudo rm -f "$SYSTEMD_DIR/$FILE"
+        info_message "Removing ${unit}..."
+        maybe_sudo rm -f "${SYSTEMD_DIR}/${unit}"
     else
-        info_message "$FILE not found. Skipping."
+        info_message "${unit} not found. Skipping."
     fi
+}
+
+# Remove Services
+for service in "${SERVICES[@]}"; do
+    remove_unit "${service}"
+done
+
+# Remove Timers
+for timer in "${TIMERS[@]}"; do
+    remove_unit "${timer}"
 done
 
 info_message "Reloading systemd daemon..."
 maybe_sudo systemctl daemon-reload
 
-print_step_header 5 "Removing Auditd Packages"
-info_message "Removing auditd packages..."
-maybe_sudo apt remove auditd audispd-plugins -y > /dev/null 2>&1 || warn_message "Failed to remove auditd packages"
+print_step_header 5 "Removing Active Response Scripts"
+info_message "Removing active response scripts..."
+maybe_sudo rm -f "$BIN_DIR/block.sh" "$BIN_DIR/unblock.sh" "$BIN_DIR/dlp.sh" || warn_message "Failed to remove one or more scripts"
+success_message "Active response scripts removal attempted."
+
+print_step_header 6 "Removing nftables Configuration"
+info_message "Removing nftables configuration..."
+maybe_sudo rm -f /etc/nftables.conf.d/wazuh.conf || warn_message "Failed to remove nftables.conf"
+info_message "Flushing nftables ruleset..."
+maybe_sudo nft flush ruleset || warn_message "Failed to flush nftables ruleset"
+success_message "nftables configuration removal attempted."
+
+print_step_header 7 "Removing Packages"
+info_message "Removing installed packages..."
+maybe_sudo apt remove auditd audispd-plugins jq -y > /dev/null 2>&1 || warn_message "Failed to remove packages"
 maybe_sudo apt autoremove -y > /dev/null 2>&1 || warn_message "Failed to auto-remove dependencies"
 
-print_step_header 6 "Cleaning Up"
+print_step_header 8 "Cleaning Up"
 info_message "Cleaning up audit logs..."
 maybe_sudo rm -f /var/log/audit/audit.log > /dev/null 2>&1 || warn_message "Failed to remove audit logs"
+
+print_step_header 9 "Verifying Uninstallation"
+# Validate uninstallation
+if maybe_sudo auditctl -l | grep -q "exfil"; then
+    warn_message "Exfiltration rules still appear to be loaded."
+else
+    success_message "Exfiltration rules are not loaded."
+fi
+
+# Validate services and timers
+info_message "Verifying active response services..."
+ALL_UNITS=("${SERVICES[@]}" "${TIMERS[@]}")
+PRESENT_UNITS=0
+
+for UNIT in "${ALL_UNITS[@]}"; do
+    if [ -f "$SYSTEMD_DIR/$UNIT" ]; then
+        error_message "$UNIT is still present in $SYSTEMD_DIR."
+        PRESENT_UNITS=$((PRESENT_UNITS + 1))
+    else
+        success_message "$UNIT is not present in $SYSTEMD_DIR."
+    fi
+done
+
+if [ "$PRESENT_UNITS" -eq 0 ]; then
+    success_message "All active response configurations removed."
+else
+    warn_message "$PRESENT_UNITS active response configurations still present."
+fi
+
+# Validate scripts
+info_message "Verifying active response scripts..."
+if [ -f "$BIN_DIR/block.sh" ] || [ -f "$BIN_DIR/unblock.sh" ] || [ -f "$BIN_DIR/dlp.sh" ]; then
+    warn_message "One or more active response scripts are still present in $BIN_DIR."
+else
+    success_message "All active response scripts removed from $BIN_DIR."
+fi
+
+# Validate nftables configuration
+info_message "Verifying nftables configuration..."
+if maybe_sudo nft list ruleset | grep -q "@blocked_ipv4" || maybe_sudo nft list ruleset | grep -q "@blocked_ipv6"; then
+    warn_message "nftables configuration still present."
+else
+    success_message "nftables configuration removed."
+fi
 
 success_message "Auditd uninstallation complete!"

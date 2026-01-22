@@ -88,10 +88,20 @@ error_exit() {
     exit 1
 }
 
+remove_systemd_dropins() {
+    UNIT_NAME="$1"
+    DROPIN_DIR="$SYSTEMD_DIR/${UNIT_NAME}.d"
+
+    if [ -d "$DROPIN_DIR" ]; then
+        warn_message "Found existing systemd drop-in directory for ${UNIT_NAME}: ${DROPIN_DIR}. Removing to ensure incoming config takes precedence."
+        maybe_sudo rm -rf "$DROPIN_DIR"
+    fi
+}
+
 remove_journald_config() {
     if maybe_sudo grep -q "<log_format>journald</log_format>" "$OSSEC_CONF_PATH"; then
         # Remove the entire journald localfile block
-        sed -i '/<localfile>/{:a;N;/<\/localfile>/!ba;/journald/d;}' "$OSSEC_CONF_PATH" || {
+        maybe_sudo sed -i '/<localfile>/{:a;N;/<\/localfile>/!ba;/journald/d;}' "$OSSEC_CONF_PATH" || {
                 error_message "Error occurred while removing the journald localfile block."
                 return 1
             }
@@ -127,7 +137,7 @@ done
 print_step_header 2 "Configuring Exfiltration Rules"
 info_message "Copying exfiltration rules to audit configuration..."
 maybe_sudo mkdir -p /etc/audit/rules.d/ > /dev/null 2>&1
-maybe_sudo curl -fsSL "${CONFIG_URL}/exfiltration.rules" -o /etc/audit/rules.d/exfiltration.rules || error_message "Failed to copy exfiltration rules"
+maybe_sudo curl -fsSL "${CONFIG_URL}/exfiltration.rules" -o /etc/audit/rules.d/exfiltration.rules || error_exit "Failed to copy exfiltration rules"
 
 print_step_header 3 "Enabling and Starting Auditd Service"
 info_message "Enabling and starting auditd service..."
@@ -147,45 +157,45 @@ success_message "Auditd service restarted successfully."
 print_step_header 6 "Configuring Active Response Services"
 info_message "Configuring systemd services and timers..."
 
-# Install Services
-for SERVICE in "${SERVICES[@]}"; do
-    URL="$CONFIG_URL/services/$SERVICE"
-    info_message "Downloading and installing $SERVICE..."
-    
-    # Download and write to systemd directory
-    if maybe_sudo curl -fsSL "$URL" -o "$SYSTEMD_DIR/$SERVICE"; then
-        success_message "$SERVICE installed."
+install_unit() {
+    local unit="$1"
+    local type="$2"  # service or timer
+    local url="${CONFIG_URL}/${type}s/${unit}"
+    info_message "Downloading and installing ${unit}..."
+    remove_systemd_dropins "$unit"
+    # Overwrite existing file to ensure incoming config overrides old
+    if maybe_sudo curl -fsSL "${url}" -o "${SYSTEMD_DIR}/${unit}"; then
+        success_message "${unit} installed."
     else
-        warn_message "Failed to download $SERVICE from $URL"
+        error_exit "Failed to download ${unit} from ${url}"
     fi
+}
+
+# Install Services
+for service in "${SERVICES[@]}"; do
+    install_unit "${service}" "service"
 done
 
 # Install Timers
-for TIMER in "${TIMERS[@]}"; do
-    URL="$CONFIG_URL/timers/$TIMER"
-    info_message "Downloading and installing $TIMER..."
-    if maybe_sudo curl -fsSL "$URL" -o "$SYSTEMD_DIR/$TIMER"; then
-        success_message "$TIMER installed."
-    else
-        warn_message "Failed to download $TIMER from $URL"
-    fi
+for timer in "${TIMERS[@]}"; do
+    install_unit "${timer}" "timer"
 done
 
 info_message "Reloading systemd daemon..."
-maybe_sudo systemctl daemon-reload
+maybe_sudo systemctl daemon-reload || error_exit "Failed to reload systemd daemon"
 
 success_message "Active response services configured successfully."
 
 print_step_header 7 "Installing Active Response Scripts"
 info_message "Installing active response scripts..."
 maybe_sudo mkdir -p "$BIN_DIR" > /dev/null 2>&1
-maybe_sudo curl -fsSL "$SCRIPTS_URL/block.sh" -o "$BIN_DIR/block.sh" || error_message "Failed to install block.sh"
-maybe_sudo curl -fsSL "$SCRIPTS_URL/unblock.sh" -o "$BIN_DIR/unblock.sh" || error_message "Failed to install unblock.sh"
-maybe_sudo curl -fsSL "$SCRIPTS_URL/dlp.sh" -o "$BIN_DIR/dlp.sh" || error_message "Failed to install dlp.sh"
+maybe_sudo curl -fsSL "$SCRIPTS_URL/block.sh" -o "$BIN_DIR/block.sh" || error_exit "Failed to install block.sh"
+maybe_sudo curl -fsSL "$SCRIPTS_URL/unblock.sh" -o "$BIN_DIR/unblock.sh" || error_exit "Failed to install unblock.sh"
+maybe_sudo curl -fsSL "$SCRIPTS_URL/dlp.sh" -o "$BIN_DIR/dlp.sh" || error_exit "Failed to install dlp.sh"
 maybe_sudo chmod +x "$BIN_DIR/block.sh" "$BIN_DIR/unblock.sh" "$BIN_DIR/dlp.sh"
 success_message "Active response scripts installed successfully."
 
-print_step_header 9 "Installing nftables Configuration"
+print_step_header 8 "Installing nftables Configuration"
 info_message "Installing nftables configuration..."
 maybe_sudo mkdir -p /etc/nftables.conf.d/ > /dev/null 2>&1
 maybe_sudo curl -fsSL "$CONFIG_URL/nftables.conf" -o "/etc/nftables.conf.d/wazuh.conf" || error_exit "Failed to install nftables.conf"
@@ -195,10 +205,10 @@ maybe_sudo nft flush ruleset
 maybe_sudo nft -f /etc/nftables.conf.d/wazuh.conf
 success_message "nftables reloaded successfully."
 
-print_step_header 10 "Removing Journald Configuration"
+print_step_header 9 "Removing Journald Configuration"
 remove_journald_config
 
-print_step_header 11 "Verifying Installation"
+print_step_header 10 "Verifying Installation"
 # Validate installation
 if maybe_sudo auditctl -l | grep -q "exfil"; then
     success_message "Exfiltration rules are loaded."
