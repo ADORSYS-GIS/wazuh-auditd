@@ -59,6 +59,13 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# Variables
+CONFIG_URL="https://raw.githubusercontent.com/ADORSYS-GIS/wazuh-auditd/refs/heads/feat/DLP/config"
+SYSTEMD_DIR="/etc/systemd/system"
+BIN_DIR="/var/ossec/active-response/bin"
+SERVICES=("wazuh-blockdomain.service" "wazuh-unblock.service")
+TIMERS=("wazuh-blockdomain.timer" "wazuh-unblock.timer")
+
 # Ensure root privileges, either directly or through sudo
 maybe_sudo() {
     if [ "$(id -u)" -ne 0 ]; then
@@ -98,16 +105,16 @@ if [[ "$(uname)" != "Linux" ]]; then
     error_exit "This script is designed for Linux systems only."
 fi
 
-# Check if auditd is already installed
-if command_exists auditctl && command_exists augenrules; then
-    info_message "Auditd tools are already installed."
-else
-    print_step_header 1 "Installing Auditd"
-    info_message "Installing auditd and audispd-plugins..."
-    maybe_sudo apt update > /dev/null 2>&1
-    maybe_sudo apt install auditd audispd-plugins -y > /dev/null 2>&1 || error_exit "Failed to install auditd packages"
-    success_message "Auditd packages installed successfully."
-fi
+# Check dependencies
+print_step_header 1 "Installing Dependencies"
+for dep in auditctl augenrules jq util-linux; do
+    if ! command_exists "$dep"; then
+        info_message "Installing $dep..."
+        maybe_sudo apt update > /dev/null 2>&1
+        maybe_sudo apt install "$dep" -y > /dev/null 2>&1 || error_exit "Failed to install $dep"
+        success_message "$dep installed successfully."
+    fi
+done 
 
 print_step_header 2 "Configuring Exfiltration Rules"
 info_message "Copying exfiltration rules to audit configuration..."
@@ -129,15 +136,69 @@ info_message "Restarting auditd service to apply rules..."
 maybe_sudo systemctl restart auditd > /dev/null 2>&1  || error_exit "Failed to restart auditd service"
 success_message "Auditd service restarted successfully."
 
-print_step_header 6 "Removing Journald Configuration"
+print_step_header 6 "Configuring Active Response Services"
+info_message "Configuring systemd services and timers..."
+
+# Install Services
+for SERVICE in "${SERVICES[@]}"; do
+    URL="$CONFIG_URL/services/$SERVICE"
+    info_message "Downloading and installing $SERVICE..."
+    
+    # Download and write to systemd directory
+    if maybe_sudo curl -fsSL "$URL" -o "$SYSTEMD_DIR/$SERVICE"; then
+        success_message "$SERVICE installed."
+    else
+        warn_message "Failed to download $SERVICE from $URL"
+    fi
+done
+
+# Install Timers
+for TIMER in "${TIMERS[@]}"; do
+    URL="$CONFIG_URL/timers/$TIMER"
+    info_message "Downloading and installing $TIMER..."
+    if maybe_sudo curl -fsSL "$URL" -o "$SYSTEMD_DIR/$TIMER"; then
+        success_message "$TIMER installed."
+    else
+        warn_message "Failed to download $TIMER from $URL"
+    fi
+done
+
+info_message "Reloading systemd daemon..."
+maybe_sudo systemctl daemon-reload
+
+success_message "Active response services configured successfully."
+
+print_step_header 7 "Removing Journald Configuration"
 remove_journald_config
 
-print_step_header 7 "Verifying Installation"
+print_step_header 8 "Verifying Installation"
 # Validate installation
 if maybe_sudo auditctl -l | grep -q "exfil"; then
     success_message "Exfiltration rules are loaded."
 else
     warn_message "Exfiltration rules do not appear to be loaded."
 fi
+
+# Validate services and timers
+info_message "Verifying active response services..."
+ALL_UNITS=("${SERVICES[@]}" "${TIMERS[@]}")
+MISSING_UNITS=0
+
+for UNIT in "${ALL_UNITS[@]}"; do
+    if [ -f "$SYSTEMD_DIR/$UNIT" ]; then
+        success_message "$UNIT is present in $SYSTEMD_DIR."
+    else
+        error_message "$UNIT is missing from $SYSTEMD_DIR."
+        MISSING_UNITS=$((MISSING_UNITS + 1))
+    fi
+done
+
+if [ "$MISSING_UNITS" -eq 0 ]; then
+    success_message "All active response configurations verified."
+else
+    warn_message "$MISSING_UNITS active response configurations are missing."
+fi
+
+
 
 success_message "Auditd installation and configuration complete!"

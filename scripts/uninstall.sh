@@ -95,12 +95,34 @@ print_step_header 3 "Disabling Auditd Service"
 info_message "Disabling auditd service..."
 maybe_sudo systemctl disable auditd > /dev/null 2>&1 || warn_message "Failed to disable auditd service"
 
-print_step_header 4 "Removing Auditd Packages"
+print_step_header 4 "Removing Active Response Services"
+info_message "Disabling and removing services..."
+
+SERVER_FILES=("wazuh-blockdomain.service" "wazuh-unblock.service" "wazuh-blockdomain.timer" "wazuh-unblock.timer")
+SYSTEMD_DIR="/etc/systemd/system"
+
+for FILE in "${SERVER_FILES[@]}"; do
+    if [ -f "$SYSTEMD_DIR/$FILE" ]; then
+        info_message "Stopping and disabling $FILE..."
+        maybe_sudo systemctl stop "$FILE" > /dev/null 2>&1 || true
+        maybe_sudo systemctl disable "$FILE" > /dev/null 2>&1 || true
+        
+        info_message "Removing $FILE..."
+        maybe_sudo rm -f "$SYSTEMD_DIR/$FILE"
+    else
+        info_message "$FILE not found. Skipping."
+    fi
+done
+
+info_message "Reloading systemd daemon..."
+maybe_sudo systemctl daemon-reload
+
+print_step_header 5 "Removing Auditd Packages"
 info_message "Removing auditd packages..."
 maybe_sudo apt remove auditd audispd-plugins -y > /dev/null 2>&1 || warn_message "Failed to remove auditd packages"
 maybe_sudo apt autoremove -y > /dev/null 2>&1 || warn_message "Failed to auto-remove dependencies"
 
-print_step_header 5 "Cleaning Up"
+print_step_header 6 "Cleaning Up"
 info_message "Cleaning up audit logs..."
 maybe_sudo rm -f /var/log/audit/audit.log > /dev/null 2>&1 || warn_message "Failed to remove audit logs"
 
