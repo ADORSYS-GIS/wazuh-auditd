@@ -1,0 +1,11 @@
+[Unit]
+Description=Wazuh Active Response Block Domain Timer
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+Persistent=true
+Unit=wazuh-blockdomain.service
+
+[Install]
+WantedBy=timers.target

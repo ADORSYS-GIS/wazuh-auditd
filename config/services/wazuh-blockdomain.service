@@ -1,0 +1,8 @@
+[Unit]
+Description=Wazuh Active Response Block Domain Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$BLOCK_SH

@@ -1,0 +1,11 @@
+[Unit]
+Description=Wazuh Active Response Unblock Timer
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+Persistent=true
+Unit=wazuh-unblock.service
+
+[Install]
+WantedBy=timers.target
