@@ -179,10 +179,20 @@ maybe_sudo curl -fsSL "$SCRIPTS_URL/dlp.sh" -o "$BIN_DIR/dlp.sh" || error_messag
 maybe_sudo chmod +x "$BIN_DIR/block.sh" "$BIN_DIR/unblock.sh" "$BIN_DIR/dlp.sh"
 success_message "Active response scripts installed successfully."
 
-print_step_header 8 "Removing Journald Configuration"
+print_step_header 9 "Installing nftables Configuration"
+info_message "Installing nftables configuration..."
+maybe_sudo mkdir -p /etc/nftables.conf.d/ > /dev/null 2>&1
+maybe_sudo curl -fsSL "$CONFIG_URL/nftables.conf" -o "/etc/nftables.conf.d/wazuh.conf" || error_exit "Failed to install nftables.conf"
+success_message "nftables configuration installed successfully."
+info_message "Reloading nftables..."
+maybe_sudo nft flush ruleset
+maybe_sudo nft -f /etc/nftables.conf.d/wazuh.conf
+success_message "nftables reloaded successfully."
+
+print_step_header 10 "Removing Journald Configuration"
 remove_journald_config
 
-print_step_header 9 "Verifying Installation"
+print_step_header 11 "Verifying Installation"
 # Validate installation
 if maybe_sudo auditctl -l | grep -q "exfil"; then
     success_message "Exfiltration rules are loaded."
@@ -216,6 +226,14 @@ if [ -f "$BIN_DIR/block.sh" ] && [ -f "$BIN_DIR/unblock.sh" ] && [ -f "$BIN_DIR/
     success_message "All active response scripts are present in $BIN_DIR."
 else
     warn_message "One or more active response scripts are missing from $BIN_DIR."
+fi
+
+# Validate nftables configuration
+info_message "Verifying nftables configuration..."
+if maybe_sudo nft list ruleset | grep -q "@blocked_ipv4" && maybe_sudo nft list ruleset | grep -q "@blocked_ipv6"; then
+    success_message "nftables configuration verified."
+else
+    warn_message "nftables configuration is missing."
 fi
 
 success_message "Auditd installation and configuration complete!"
