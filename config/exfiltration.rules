@@ -1,0 +1,12 @@
+-a always,exit -F arch=b64 -S execve -F exe=/usr/bin/curl -k exfil
+-a always,exit -F arch=b64 -S execve -F exe=/usr/bin/wget -k exfil
+-a always,exit -F arch=b64 -S execve -F exe=/usr/bin/nc -k exfil
+-a always,exit -F arch=b64 -S execve -F exe=/usr/bin/netcat -k exfil
+-a always,exit -F arch=b64 -S execve -F exe=/usr/bin/scp -k exfil
+-a always,exit -F arch=b64 -S execve -F exe=/usr/bin/rsync -k exfil
+-a always,exit -F arch=b64 -S execve -F exe=/usr/bin/sftp -k exfil
+-a always,exit -F arch=b64 -S execve -F exe=/usr/bin/ftp -k exfil
+-a always,exit -F arch=b64 -S execve -F exe=/usr/bin/python -k exfil
+-a always,exit -F arch=b64 -S execve -F exe=/usr/bin/python3 -k exfil
+-a always,exit -F arch=b64 -S execve -F exe=/usr/bin/perl -k exfil
+-a always,exit -F arch=b64 -S execve -F exe=/usr/bin/ssh -k exfil
