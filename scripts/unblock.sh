@@ -180,9 +180,12 @@ process_scheduled_unblocks() {
 # -------------------------------------------------------------------------
 # Main Execution
 # -------------------------------------------------------------------------
-input="$1"
+# -------------------------------------------------------------------------
+# Main Execution
+# -------------------------------------------------------------------------
+input="${1:-}"
 keep_domain="false"
-[[ "$2" == "--keep-domain" ]] && keep_domain="true"
+[[ "${2:-}" == "--keep-domain" ]] && keep_domain="true"
 
 if [[ -z "$input" ]]; then
     log "Info: Running scheduled unblock processing"
