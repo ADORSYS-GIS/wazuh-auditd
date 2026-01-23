@@ -119,7 +119,9 @@ fi
 
 # Check dependencies
 print_step_header 1 "Installing Dependencies"
+info_message "updating package list"
 maybe_sudo apt update > /dev/null 2>&1
+info_message "Checking dependencies"
 deps=("auditd:auditctl augenrules" "jq:jq" "util-linux:flock")
 for entry in "${deps[@]}"; do
     pkg="${entry%%:*}"
