@@ -21,6 +21,7 @@ if [[ "$OS_NAME" == "Darwin" ]]; then
     STATE_FILE="${STATE_DIR}/dlp_state.json"
     UNBLOCK_SCRIPT="/Library/Ossec/active-response/bin/unblock.sh"
     BLOCK_DOMAIN_PLIST="/Library/LaunchDaemons/com.wazuh.blockdomain.plist"
+    PF_TABLE="wazuh_blocked"
 elif [[ "$OS_NAME" == "Linux" ]]; then
     LOG_FILE="/var/ossec/logs/active-responses.log"
     STATE_DIR="/var/ossec/active-response/dlp-state"
@@ -137,16 +138,16 @@ block_ip() {
             return 1
         fi
     elif [[ "$OS_NAME" == "Darwin" ]]; then
-        if ! pfctl -t wazuh_fwtable -T test "$ip" &>/dev/null; then
-            if pfctl -t wazuh_fwtable -T add "$ip" &>/dev/null; then
-                log "Info: Successfully added $ip to pf table (wazuh_fwtable)"
+        if ! pfctl -t $PF_TABLE -T test "$ip" &>/dev/null; then
+            if pfctl -t $PF_TABLE -T add "$ip" &>/dev/null; then
+                log "Info: Successfully added $ip to pf table ($PF_TABLE)"
                 return 0
             else
-                log "Error: Failed to add $ip to pf table (wazuh_fwtable)"
+                log "Error: Failed to add $ip to pf table ($PF_TABLE)"
                 return 1
             fi
         else
-            log "Info: $ip already exists in pf table (wazuh_fwtable)"
+            log "Info: $ip already exists in pf table ($PF_TABLE)"
             return 0
         fi
     fi

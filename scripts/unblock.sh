@@ -20,6 +20,7 @@ if [[ "$OS_NAME" == "Darwin" ]]; then
     STATE_DIR="/Library/Ossec/active-response/dlp-state"
     STATE_FILE="${STATE_DIR}/dlp_state.json"
     UNBLOCK_PLIST="/Library/LaunchDaemons/com.wazuh.unblock.plist"
+    PF_TABLE="wazuh_blocked"
 elif [[ "$OS_NAME" == "Linux" ]]; then
     LOG_FILE="/var/ossec/logs/active-responses.log"
     STATE_DIR="/var/ossec/active-response/dlp-state"
@@ -108,15 +109,15 @@ unblock_ip() {
             log "Info: $ip not found in nftables ($table)"
         fi
     elif [[ "$OS_NAME" == "Darwin" ]]; then
-        if pfctl -t wazuh_fwtable -T test "$ip" &>/dev/null; then
-            if pfctl -t wazuh_fwtable -T delete "$ip" &>/dev/null; then
-                log "Info: Successfully removed $ip from pf table (wazuh_fwtable)"
+        if pfctl -t $PF_TABLE -T test "$ip" &>/dev/null; then
+            if pfctl -t $PF_TABLE -T delete "$ip" &>/dev/null; then
+                log "Info: Successfully removed $ip from pf table ($PF_TABLE)"
             else
-                log "Error: Failed to remove $ip from pf table (wazuh_fwtable)"
+                log "Error: Failed to remove $ip from pf table ($PF_TABLE)"
                 return 1
             fi
         else
-            log "Info: $ip not found in pf table (wazuh_fwtable)"
+            log "Info: $ip not found in pf table ($PF_TABLE)"
         fi
     fi
 }
