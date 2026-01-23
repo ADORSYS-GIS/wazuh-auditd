@@ -11,7 +11,9 @@ fi
 LOG_LEVEL=${LOG_LEVEL:-INFO}
 OSSEC_CONF_PATH="/var/ossec/etc/ossec.conf"
 SYSTEMD_DIR="/etc/systemd/system"
-BIN_DIR="/var/ossec/active-response/bin"
+ACTIVE_RESPONSE_DIR="/var/ossec/active-response"
+BIN_DIR="$ACTIVE_RESPONSE_DIR/bin"
+STATE_DIR="$ACTIVE_RESPONSE_DIR/dlp-state"
 SERVICES=("wazuh-blockdomain.service" "wazuh-unblock.service")
 TIMERS=("wazuh-blockdomain.timer" "wazuh-unblock.timer")
 
@@ -133,13 +135,14 @@ maybe_sudo systemctl daemon-reload
 print_step_header 5 "Removing Active Response Scripts"
 info_message "Removing active response scripts..."
 maybe_sudo rm -f "$BIN_DIR/block.sh" "$BIN_DIR/unblock.sh" "$BIN_DIR/dlp.sh" || warn_message "Failed to remove one or more scripts"
+maybe_sudo rm -rf "$STATE_DIR" || warn_message "Failed to remove DLP state directory"
 success_message "Active response scripts removal attempted."
 
 print_step_header 6 "Removing nftables Configuration"
 info_message "Removing nftables configuration..."
 maybe_sudo rm -f /etc/nftables.conf.d/wazuh.conf || warn_message "Failed to remove nftables.conf"
 info_message "Flushing nftables ruleset..."
-maybe_sudo nft flush ruleset || warn_message "Failed to flush nftables ruleset"
+maybe_sudo nft delete table inet egress || warn_message "Failed to delete Wazuh nftables table"
 success_message "nftables configuration removal attempted."
 
 print_step_header 7 "Removing Packages"
@@ -181,10 +184,10 @@ fi
 
 # Validate scripts
 info_message "Verifying active response scripts..."
-if [ -f "$BIN_DIR/block.sh" ] || [ -f "$BIN_DIR/unblock.sh" ] || [ -f "$BIN_DIR/dlp.sh" ]; then
-    warn_message "One or more active response scripts are still present in $BIN_DIR."
+if [ -f "$BIN_DIR/block.sh" ] || [ -f "$BIN_DIR/unblock.sh" ] || [ -f "$BIN_DIR/dlp.sh" ] || [ -d "$STATE_DIR" ]; then
+    warn_message "One or more DLP active response scripts or state directory are still present in $BIN_DIR."
 else
-    success_message "All active response scripts removed from $BIN_DIR."
+    success_message "All DLP active response scripts and state directory removed from $ACTIVE_RESPONSE_DIR."
 fi
 
 # Validate nftables configuration
