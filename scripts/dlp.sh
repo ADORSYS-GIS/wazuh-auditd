@@ -147,14 +147,17 @@ block_destination() {
 schedule_unblock() {
     local target="$1"
     local unblock_at
+    local unblock_time_str
 
     if [[ "$OS_NAME" == "Darwin" ]]; then
         unblock_at=$(date -v+${UNBLOCK_DURATION}S +%s)
+        unblock_time_str=$(date -r "$unblock_at")
     else
         unblock_at=$(date -d "+${UNBLOCK_DURATION} seconds" +%s)
+        unblock_time_str=$(date -d "@$unblock_at")
     fi
     
-    log "Info: Scheduling unblock for $target at $(date -r $unblock_at 2>/dev/null || date -d @$unblock_at)"
+    log "Info: Scheduling unblock for $target at $unblock_time_str"
     
     if [[ "$target" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
         state_update jq --arg ip "$target" --argjson at "$unblock_at" \
@@ -291,6 +294,5 @@ if [[ -z "$destination" ]]; then
 fi
 
 log "Info: Processing exfiltration event [Agent: $AGENT_ID, Rule: $RULE_ID, Destination: $destination]"
-echo $destination
 
 send_notification "Potential data exfiltration detected to $destination. Agent: $AGENT_ID, Rule: $RULE_ID" "$destination"
