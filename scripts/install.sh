@@ -115,7 +115,7 @@ print_step_header 1 "Installing Dependencies"
 info_message "updating package list"
 maybe_sudo apt update > /dev/null 2>&1
 info_message "Checking dependencies"
-for dep in "auditctl" "augenrules" "jq"; do
+for dep in "auditd" "audispd-plugins" "jq"; do
     if command_exists "$dep"; then
         success_message "$dep already installed... Skipping installation."
         continue
