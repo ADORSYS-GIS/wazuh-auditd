@@ -38,11 +38,21 @@ log() {
     echo "$ts wazuh-dlp: $1" >> "$LOG_FILE"
 }
 
-cleanup() {
-    :
+# -------------------------------------------------------------------------
+# Input Sanitization
+# -------------------------------------------------------------------------
+remove_full_log() {
+  awk '{
+    if (match($0, /"full_log":"/)) {
+      before = substr($0, 1, RSTART + RLENGTH - 1)
+      after = substr($0, RSTART + RLENGTH)
+      if (match(after, /","/)) {                                            
+        after = substr(after, RSTART)
+        print before after
+      }
+    }
+  }'
 }
-
-trap cleanup EXIT INT TERM
 
 # -------------------------------------------------------------------------
 # State Management
@@ -383,8 +393,9 @@ send_notification() {
 # -------------------------------------------------------------------------
 
 read INPUT_JSON
-EXFIL_COMMAND=$(echo "$INPUT_JSON" | jq -r .parameters.alert.data.audit.execve)
-RULE_ID=$(echo "$INPUT_JSON" | jq -r .parameters.alert.rule.id)
+SANITIZED_JSON=$(echo "$INPUT_JSON" | remove_full_log)
+EXFIL_COMMAND=$(echo "$SANITIZED_JSON" | jq -r .parameters.alert.data.audit.execve)
+RULE_ID=$(echo "$SANITIZED_JSON" | jq -r .parameters.alert.rule.id)
 
 destination=$(extract_destination "$EXFIL_COMMAND")
 
