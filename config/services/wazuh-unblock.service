@@ -1,8 +1,0 @@
-[Unit]
-Description=Wazuh Active Response Unblock Service
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/var/ossec/active-response/bin/unblock.sh

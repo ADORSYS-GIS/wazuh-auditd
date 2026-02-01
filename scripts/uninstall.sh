@@ -1,11 +1,7 @@
-#!/bin/sh
+#!/bin/bash
 
 # Set shell options
-if [ -n "$BASH_VERSION" ]; then
-    set -euo pipefail
-else
-    set -eu
-fi
+set -euo pipefail
 
 # Variables
 LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -14,8 +10,8 @@ SYSTEMD_DIR="/etc/systemd/system"
 ACTIVE_RESPONSE_DIR="/var/ossec/active-response"
 BIN_DIR="$ACTIVE_RESPONSE_DIR/bin"
 STATE_DIR="$ACTIVE_RESPONSE_DIR/dlp-state"
-SERVICES=("wazuh-blockdomain.service" "wazuh-unblock.service")
-TIMERS=("wazuh-blockdomain.timer" "wazuh-unblock.timer")
+REFRESH_SERVICE="wazuh-refresh.service"
+REFRESH_TIMER="wazuh-refresh.timer"
 
 # Define text formatting
 RED='\033[0;31m'
@@ -119,22 +115,18 @@ remove_unit() {
     fi
 }
 
-# Remove Services
-for service in "${SERVICES[@]}"; do
-    remove_unit "${service}"
-done
+# Remove Service
+remove_unit "${REFRESH_SERVICE}"
 
-# Remove Timers
-for timer in "${TIMERS[@]}"; do
-    remove_unit "${timer}"
-done
+# Remove Timer
+remove_unit "${REFRESH_TIMER}"
 
 info_message "Reloading systemd daemon..."
 maybe_sudo systemctl daemon-reload
 
 print_step_header 5 "Removing Active Response Scripts"
 info_message "Removing active response scripts..."
-maybe_sudo rm -f "$BIN_DIR/block.sh" "$BIN_DIR/unblock.sh" "$BIN_DIR/dlp.sh" || warn_message "Failed to remove one or more scripts"
+maybe_sudo rm -f "$BIN_DIR/dlp.sh" || warn_message "Failed to remove script"
 maybe_sudo rm -rf "$STATE_DIR" || warn_message "Failed to remove DLP state directory"
 success_message "Active response scripts removal attempted."
 
@@ -164,10 +156,9 @@ fi
 
 # Validate services and timers
 info_message "Verifying active response services..."
-ALL_UNITS=("${SERVICES[@]}" "${TIMERS[@]}")
 PRESENT_UNITS=0
 
-for UNIT in "${ALL_UNITS[@]}"; do
+for UNIT in $REFRESH_SERVICE $REFRESH_TIMER; do
     if [ -f "$SYSTEMD_DIR/$UNIT" ]; then
         error_message "$UNIT is still present in $SYSTEMD_DIR."
         PRESENT_UNITS=$((PRESENT_UNITS + 1))
@@ -184,10 +175,10 @@ fi
 
 # Validate scripts
 info_message "Verifying active response scripts..."
-if [ -f "$BIN_DIR/block.sh" ] || [ -f "$BIN_DIR/unblock.sh" ] || [ -f "$BIN_DIR/dlp.sh" ] || [ -d "$STATE_DIR" ]; then
-    warn_message "One or more DLP active response scripts or state directory are still present in $BIN_DIR."
+if [ -f "$BIN_DIR/dlp.sh" ] || [ -d "$STATE_DIR" ]; then
+    warn_message "The DLP active response script or state directory are still present in $BIN_DIR."
 else
-    success_message "All DLP active response scripts and state directory removed from $ACTIVE_RESPONSE_DIR."
+    success_message "The DLP active response script and state directory removed from $ACTIVE_RESPONSE_DIR."
 fi
 
 # Validate nftables configuration

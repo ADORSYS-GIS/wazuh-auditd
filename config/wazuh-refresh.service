@@ -1,0 +1,8 @@
+[Unit]
+Description=Wazuh Active Response Refresh Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/var/ossec/active-response/bin/dlp.sh -refresh

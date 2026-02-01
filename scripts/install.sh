@@ -1,15 +1,7 @@
-#!/bin/sh
+#!/bin/bash
 
 # Set shell options
-if [ -n "$BASH_VERSION" ]; then
-    set -euo pipefail
-else
-    set -eu
-fi
-
-# Variables
-LOG_LEVEL=${LOG_LEVEL:-INFO}
-OSSEC_CONF_PATH="/var/ossec/etc/ossec.conf"
+set -euo pipefail
 
 # Define text formatting
 RED='\033[0;31m'
@@ -60,13 +52,14 @@ command_exists() {
 }
 
 # Variables
+OSSEC_CONF_PATH="/var/ossec/etc/ossec.conf"
 BASE_URL="https://raw.githubusercontent.com/ADORSYS-GIS/wazuh-auditd/refs/heads/feat/DLP"
 CONFIG_URL="${BASE_URL}/config"
 SCRIPTS_URL="${BASE_URL}/scripts"
 SYSTEMD_DIR="/etc/systemd/system"
 BIN_DIR="/var/ossec/active-response/bin"
-SERVICES=("wazuh-blockdomain.service" "wazuh-unblock.service")
-TIMERS=("wazuh-blockdomain.timer" "wazuh-unblock.timer")
+REFRESH_SERVICE="wazuh-refresh.service"
+REFRESH_TIMER="wazuh-refresh.timer"
 
 # Ensure root privileges, either directly or through sudo
 maybe_sudo() {
@@ -122,18 +115,13 @@ print_step_header 1 "Installing Dependencies"
 info_message "updating package list"
 maybe_sudo apt update > /dev/null 2>&1
 info_message "Checking dependencies"
-deps=("auditd:auditctl augenrules" "jq:jq" "util-linux:flock")
-for entry in "${deps[@]}"; do
-    pkg="${entry%%:*}"
-    cmds="${entry##*:}"
-    for cmd in $cmds; do
-        if command_exists "$cmd"; then
-            success_message "$pkg already installed... Skipping installation."
-            continue 2
-        fi
-    done
-    maybe_sudo apt install "$pkg" -y > /dev/null 2>&1 || error_exit "Failed to install $pkg"
-    success_message "$pkg installed successfully."
+for dep in "auditctl" "augenrules" "jq"; do
+    if command_exists "$dep"; then
+        success_message "$dep already installed... Skipping installation."
+        continue
+    fi
+    maybe_sudo apt install "$dep" -y > /dev/null 2>&1 || error_exit "Failed to install $dep"
+    success_message "$dep installed successfully."
 done
 
 print_step_header 2 "Configuring Exfiltration Rules"
@@ -161,8 +149,7 @@ info_message "Configuring systemd services and timers..."
 
 install_unit() {
     local unit="$1"
-    local type="$2"  # service or timer
-    local url="${CONFIG_URL}/${type}s/${unit}"
+    local url="${CONFIG_URL}/${unit}"
     info_message "Downloading and installing ${unit}..."
     remove_systemd_dropins "$unit"
     # Overwrite existing file to ensure incoming config overrides old
@@ -173,14 +160,9 @@ install_unit() {
     fi
 }
 
-# Install Services
-for service in "${SERVICES[@]}"; do
-    install_unit "${service}" "service"
-done
-
-# Install Timers
-for timer in "${TIMERS[@]}"; do
-    install_unit "${timer}" "timer"
+# Install Service
+for UNIT in "$REFRESH_SERVICE" "$REFRESH_TIMER"; do
+    install_unit "${UNIT}"
 done
 
 info_message "Reloading systemd daemon..."
@@ -191,10 +173,8 @@ success_message "Active response services configured successfully."
 print_step_header 7 "Installing Active Response Scripts"
 info_message "Installing active response scripts..."
 maybe_sudo mkdir -p "$BIN_DIR" > /dev/null 2>&1
-maybe_sudo curl -fsSL "$SCRIPTS_URL/block.sh" -o "$BIN_DIR/block.sh" || error_exit "Failed to install block.sh"
-maybe_sudo curl -fsSL "$SCRIPTS_URL/unblock.sh" -o "$BIN_DIR/unblock.sh" || error_exit "Failed to install unblock.sh"
 maybe_sudo curl -fsSL "$SCRIPTS_URL/dlp.sh" -o "$BIN_DIR/dlp.sh" || error_exit "Failed to install dlp.sh"
-maybe_sudo chmod +x "$BIN_DIR/block.sh" "$BIN_DIR/unblock.sh" "$BIN_DIR/dlp.sh"
+maybe_sudo chmod +x "$BIN_DIR/dlp.sh"
 success_message "Active response scripts installed successfully."
 
 print_step_header 8 "Installing nftables Configuration"
@@ -220,10 +200,9 @@ fi
 
 # Validate services and timers
 info_message "Verifying active response services..."
-ALL_UNITS=("${SERVICES[@]}" "${TIMERS[@]}")
 MISSING_UNITS=0
 
-for UNIT in "${ALL_UNITS[@]}"; do
+for UNIT in "$REFRESH_SERVICE" "$REFRESH_TIMER"; do
     if [ -f "$SYSTEMD_DIR/$UNIT" ]; then
         success_message "$UNIT is present in $SYSTEMD_DIR."
     else
@@ -240,7 +219,7 @@ fi
 
 # Validate scripts
 info_message "Verifying active response scripts..."
-if [ -f "$BIN_DIR/block.sh" ] && [ -f "$BIN_DIR/unblock.sh" ] && [ -f "$BIN_DIR/dlp.sh" ]; then
+if [ -f "$BIN_DIR/dlp.sh" ]; then
     success_message "All active response scripts are present in $BIN_DIR."
 else
     warn_message "One or more active response scripts are missing from $BIN_DIR."
