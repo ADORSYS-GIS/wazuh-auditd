@@ -58,8 +58,6 @@ CONFIG_URL="${BASE_URL}/config"
 SCRIPTS_URL="${BASE_URL}/scripts"
 SYSTEMD_DIR="/etc/systemd/system"
 BIN_DIR="/var/ossec/active-response/bin"
-REFRESH_SERVICE="wazuh-refresh.service"
-REFRESH_TIMER="wazuh-refresh.timer"
 
 # Ensure root privileges, either directly or through sudo
 maybe_sudo() {
@@ -144,40 +142,14 @@ info_message "Restarting auditd service to apply rules..."
 maybe_sudo systemctl restart auditd > /dev/null 2>&1  || error_exit "Failed to restart auditd service"
 success_message "Auditd service restarted successfully."
 
-print_step_header 6 "Configuring Active Response Services"
-info_message "Configuring systemd services and timers..."
-
-install_unit() {
-    local unit="$1"
-    local url="${CONFIG_URL}/${unit}"
-    info_message "Downloading and installing ${unit}..."
-    remove_systemd_dropins "$unit"
-    # Overwrite existing file to ensure incoming config overrides old
-    if maybe_sudo curl -fsSL "${url}" -o "${SYSTEMD_DIR}/${unit}"; then
-        success_message "${unit} installed."
-    else
-        error_exit "Failed to download ${unit} from ${url}"
-    fi
-}
-
-# Install Service
-for UNIT in "$REFRESH_SERVICE" "$REFRESH_TIMER"; do
-    install_unit "${UNIT}"
-done
-
-info_message "Reloading systemd daemon..."
-maybe_sudo systemctl daemon-reload || error_exit "Failed to reload systemd daemon"
-
-success_message "Active response services configured successfully."
-
-print_step_header 7 "Installing Active Response Scripts"
+print_step_header 6 "Installing Active Response Scripts"
 info_message "Installing active response scripts..."
 maybe_sudo mkdir -p "$BIN_DIR" > /dev/null 2>&1
 maybe_sudo curl -fsSL "$SCRIPTS_URL/dlp.sh" -o "$BIN_DIR/dlp.sh" || error_exit "Failed to install dlp.sh"
 maybe_sudo chmod +x "$BIN_DIR/dlp.sh"
 success_message "Active response scripts installed successfully."
 
-print_step_header 8 "Installing nftables Configuration"
+print_step_header 7 "Installing nftables Configuration"
 info_message "Installing nftables configuration..."
 maybe_sudo mkdir -p /etc/nftables.conf.d/ > /dev/null 2>&1
 maybe_sudo curl -fsSL "$CONFIG_URL/nftables.conf" -o "/etc/nftables.conf.d/wazuh.conf" || error_exit "Failed to install nftables.conf"
@@ -187,34 +159,15 @@ maybe_sudo nft flush ruleset
 maybe_sudo nft -f /etc/nftables.conf.d/wazuh.conf
 success_message "nftables reloaded successfully."
 
-print_step_header 9 "Removing Journald Configuration"
+print_step_header 8 "Removing Journald Configuration"
 remove_journald_config
 
-print_step_header 10 "Verifying Installation"
+print_step_header 9 "Verifying Installation"
 # Validate installation
 if maybe_sudo auditctl -l | grep -q "exfil"; then
     success_message "Exfiltration rules are loaded."
 else
     warn_message "Exfiltration rules do not appear to be loaded."
-fi
-
-# Validate services and timers
-info_message "Verifying active response services..."
-MISSING_UNITS=0
-
-for UNIT in "$REFRESH_SERVICE" "$REFRESH_TIMER"; do
-    if [ -f "$SYSTEMD_DIR/$UNIT" ]; then
-        success_message "$UNIT is present in $SYSTEMD_DIR."
-    else
-        error_message "$UNIT is missing from $SYSTEMD_DIR."
-        MISSING_UNITS=$((MISSING_UNITS + 1))
-    fi
-done
-
-if [ "$MISSING_UNITS" -eq 0 ]; then
-    success_message "All active response configurations verified."
-else
-    warn_message "$MISSING_UNITS active response configurations are missing."
 fi
 
 # Validate scripts

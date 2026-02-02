@@ -10,8 +10,6 @@ SYSTEMD_DIR="/etc/systemd/system"
 ACTIVE_RESPONSE_DIR="/var/ossec/active-response"
 BIN_DIR="$ACTIVE_RESPONSE_DIR/bin"
 STATE_DIR="$ACTIVE_RESPONSE_DIR/dlp-state"
-REFRESH_SERVICE="wazuh-refresh.service"
-REFRESH_TIMER="wazuh-refresh.timer"
 
 # Define text formatting
 RED='\033[0;31m'
@@ -98,79 +96,34 @@ print_step_header 3 "Disabling Auditd Service"
 info_message "Disabling auditd service..."
 maybe_sudo systemctl disable auditd > /dev/null 2>&1 || warn_message "Failed to disable auditd service"
 
-print_step_header 4 "Removing Active Response Services"
-info_message "Disabling and removing services and timers..."
-
-remove_unit() {
-    local unit="$1"
-    if [ -f "${SYSTEMD_DIR}/${unit}" ]; then
-        info_message "Stopping and disabling ${unit}..."
-        maybe_sudo systemctl stop "${unit}" > /dev/null 2>&1 || true
-        maybe_sudo systemctl disable "${unit}" > /dev/null 2>&1 || true
-        
-        info_message "Removing ${unit}..."
-        maybe_sudo rm -f "${SYSTEMD_DIR}/${unit}"
-    else
-        info_message "${unit} not found. Skipping."
-    fi
-}
-
-# Remove Service
-remove_unit "${REFRESH_SERVICE}"
-
-# Remove Timer
-remove_unit "${REFRESH_TIMER}"
-
-info_message "Reloading systemd daemon..."
-maybe_sudo systemctl daemon-reload
-
-print_step_header 5 "Removing Active Response Scripts"
+print_step_header 4 "Removing Active Response Scripts"
 info_message "Removing active response scripts..."
 maybe_sudo rm -f "$BIN_DIR/dlp.sh" || warn_message "Failed to remove script"
 maybe_sudo rm -rf "$STATE_DIR" || warn_message "Failed to remove DLP state directory"
 success_message "Active response scripts removal attempted."
 
-print_step_header 6 "Removing nftables Configuration"
+print_step_header 5 "Removing nftables Configuration"
 info_message "Removing nftables configuration..."
 maybe_sudo rm -f /etc/nftables.conf.d/wazuh.conf || warn_message "Failed to remove nftables.conf"
 info_message "Flushing nftables ruleset..."
 maybe_sudo nft delete table inet egress || warn_message "Failed to delete Wazuh nftables table"
 success_message "nftables configuration removal attempted."
 
-print_step_header 7 "Removing Packages"
+print_step_header 6 "Removing Packages"
 info_message "Removing installed packages..."
 maybe_sudo apt remove auditd audispd-plugins jq -y > /dev/null 2>&1 || warn_message "Failed to remove packages"
 maybe_sudo apt autoremove -y > /dev/null 2>&1 || warn_message "Failed to auto-remove dependencies"
 
-print_step_header 8 "Cleaning Up"
+print_step_header 7 "Cleaning Up"
 info_message "Cleaning up audit logs..."
 maybe_sudo rm -f /var/log/audit/audit.log > /dev/null 2>&1 || warn_message "Failed to remove audit logs"
 
-print_step_header 9 "Verifying Uninstallation"
+print_step_header 8 "Verifying Uninstallation"
 # Validate uninstallation
 if maybe_sudo auditctl -l | grep -q "exfil"; then
     warn_message "Exfiltration rules still appear to be loaded."
 else
     success_message "Exfiltration rules are not loaded."
-fi
-
-# Validate services and timers
-info_message "Verifying active response services..."
-PRESENT_UNITS=0
-
-for UNIT in $REFRESH_SERVICE $REFRESH_TIMER; do
-    if [ -f "$SYSTEMD_DIR/$UNIT" ]; then
-        error_message "$UNIT is still present in $SYSTEMD_DIR."
-        PRESENT_UNITS=$((PRESENT_UNITS + 1))
-    else
-        success_message "$UNIT is not present in $SYSTEMD_DIR."
-    fi
-done
-
-if [ "$PRESENT_UNITS" -eq 0 ]; then
-    success_message "All active response configurations removed."
-else
-    warn_message "$PRESENT_UNITS active response configurations still present."
 fi
 
 # Validate scripts

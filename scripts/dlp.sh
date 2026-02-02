@@ -1,6 +1,6 @@
 #!/bin/bash
-# DLP Active Response Script (Linux)
-# Actions: Blocks destination IP/domain temporarily or permanently
+# DLP Active Response Script (Linux & macOS)
+# Actions: Blocks destination IP/domain permanently until manual unblock
 
 # -------------------------------------------------------------------------
 # Global Configuration & Arguments
@@ -8,29 +8,28 @@
 
 set -euo pipefail
 
+OS_NAME=$(uname -s)
 
-LOG_FILE="/var/ossec/logs/active-responses.log"
-ICON_PATH="/usr/share/pixmaps/wazuh-logo.png"
-STATE_DIR="/var/ossec/active-response/dlp-state"
-STATE_FILE="${STATE_DIR}/dlp_state.json"
-REFRESH_TIMER="wazuh-refresh.timer"
-UNBLOCK_DURATION=${UNBLOCK_DURATION:-60}
-OS_NAME=$(uname)
-
-# Argument Parsing
-REFRESH=false
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        -refresh) REFRESH=true; shift ;;
-        *) break ;;
-    esac
-done
+if [[ "$OS_NAME" == "Linux" ]]; then
+    LOG_FILE="/var/ossec/logs/active-responses.log"
+    STATE_DIR="/var/ossec/active-response/dlp-state"
+elif [[ "$OS_NAME" == "Darwin" ]]; then
+    LOG_FILE="/Library/Ossec/active-response/active-responses.log"
+    STATE_DIR="/Library/Ossec/active-response/dlp-state"
+    PF_TABLE="wazuh_blocked"
+else
+    echo "Unsupported OS: $OS_NAME"
+    exit 1
+fi
 
 # Ensure state directory exists
-[[ -d "$STATE_DIR" ]] || mkdir -p "$STATE_DIR" && chmod 750 "$STATE_DIR"
+if [[ ! -d "$STATE_DIR" ]]; then
+    mkdir -p "$STATE_DIR"
+    chmod 750 "$STATE_DIR"
+fi
 
 # -------------------------------------------------------------------------
-# Logging & Cleanup
+# Logging
 # -------------------------------------------------------------------------
 log() {
     local ts
@@ -55,28 +54,13 @@ remove_full_log() {
 }
 
 # -------------------------------------------------------------------------
-# State Management
-# -------------------------------------------------------------------------
-get_state() {
-    if [[ ! -f "$STATE_FILE" ]]; then
-        log "Warning: State file not found, creating new state file"
-        echo '{"domains":{},"ips":{}}' > "$STATE_FILE"
-        chmod 640 "$STATE_FILE"
-    else
-        log "Info: Loaded state file: $STATE_FILE"
-    fi
-    cat "$STATE_FILE"
-}
-
-save_state() {
-    local state="$1"
-    echo "$state" > "$STATE_FILE"
-}
-
-# -------------------------------------------------------------------------
 # Dependency Check
 # -------------------------------------------------------------------------
-for bin in jq nft; do
+DEPS=("jq")
+[[ "$OS_NAME" == "Linux" ]] && DEPS+=("nft")
+[[ "$OS_NAME" == "Darwin" ]] && DEPS+=("pfctl")
+
+for bin in "${DEPS[@]}"; do
     if ! command -v "$bin" >/dev/null 2>&1; then
         log "Error: $bin not found. Ensure it is installed and in PATH."
         exit 1
@@ -107,163 +91,105 @@ resolve_domain() {
 block_ip() {
     local ip="$1"
     local source="${2:-Unknown}"
-    local unblock_at="${3:-Never}"
-    local table="blocked_ipv4"
-    [[ "$ip" =~ : ]] && table="blocked_ipv6"
     
-    log "Info: Attempting to block IP: $ip (Source: $source, Unblock: $unblock_at)"
+    log "Info: Attempting to block IP: $ip (Source: $source)"
     
-    if ! nft get element inet egress "$table" { "$ip" } &>/dev/null; then
-        if nft add element inet egress "$table" { "$ip" }; then
-            log "Info: Successfully blocked IP: $ip (Source: $source)"
-            return 0
-        else
-            log "Error: Failed to block IP: $ip"
-            return 1
+    if [[ "$OS_NAME" == "Linux" ]]; then
+        local table="blocked_ipv4"
+        [[ "$ip" =~ : ]] && table="blocked_ipv6"
+        if ! nft get element inet egress "$table" { "$ip" } &>/dev/null; then
+            if nft add element inet egress "$table" { "$ip" }; then
+                log "Info: Successfully blocked IP: $ip (Source: $source)"
+                return 0
+            else
+                log "Error: Failed to block IP: $ip"
+                return 1
+            fi
         fi
-    else
-        log "Info: $ip already exists in nftables ($table)"
-        return 0
+    elif [[ "$OS_NAME" == "Darwin" ]]; then
+        if ! pfctl -t "$PF_TABLE" -T test "$ip" &>/dev/null; then
+            if pfctl -t "$PF_TABLE" -T add "$ip" &>/dev/null; then
+                log "Info: Successfully blocked IP: $ip (Source: $source)"
+                return 0
+            else
+                log "Error: Failed to block IP: $ip"
+                return 1
+            fi
+        fi
     fi
+    
+    log "Info: $ip already exists in firewall"
+    return 0
 }
 
 unblock_ip() {
     local ip="$1"
-    local table="blocked_ipv4"
-    [[ "$ip" =~ : ]] && table="blocked_ipv6"
-
     log "Info: Attempting to unblock IP: $ip"
-    if nft get element inet egress "$table" { "$ip" } &>/dev/null; then
-        if nft delete element inet egress "$table" { "$ip" }; then
-            log "Info: Successfully unblocked IP: $ip"
-            return 0
-        else
-            log "Error: Failed to unblock IP: $ip"
-            return 1
+
+    if [[ "$OS_NAME" == "Linux" ]]; then
+        local table="blocked_ipv4"
+        [[ "$ip" =~ : ]] && table="blocked_ipv6"
+        if nft get element inet egress "$table" { "$ip" } &>/dev/null; then
+            if nft delete element inet egress "$table" { "$ip" }; then
+                log "Info: Successfully unblocked IP: $ip"
+                return 0
+            else
+                log "Error: Failed to unblock IP: $ip"
+                return 1
+            fi
         fi
-    else
-        log "Info: $ip not found in nftables ($table) - nothing to unblock"
-        return 0
+    elif [[ "$OS_NAME" == "Darwin" ]]; then
+        if pfctl -t "$PF_TABLE" -T test "$ip" &>/dev/null; then
+            if pfctl -t "$PF_TABLE" -T delete "$ip" &>/dev/null; then
+                log "Info: Successfully unblocked IP: $ip"
+                return 0
+            else
+                log "Error: Failed to unblock IP: $ip"
+                return 1
+            fi
+        fi
     fi
-}
 
-update_domain() {
-    local domain=$1
-    local block_type=$2
-    local unblock_time=$3
-    local state="$4"
-    
-    log "Info: Updating IPs for target: $domain (Type: $block_type, Unblock: $unblock_time)"
-    
-    local resolved_ips
-    resolved_ips=$(resolve_domain "$domain" || echo "")
-    
-    local old_ips
-    old_ips=$(echo "$state" | jq -r ".domains[\"$domain\"].ips // [] | .[]")
-    
-    # Block new IPs
-    while IFS= read -r ip; do
-        [[ -z "$ip" ]] && continue
-        if ! echo "$old_ips" | grep -q "^$ip$"; then
-            block_ip "$ip" "$domain" "$unblock_time"
-        fi
-    done <<< "$resolved_ips"
-
-    # Unblock removed IPs
-    while IFS= read -r ip; do
-        [[ -z "$ip" ]] && continue
-        if ! echo "$resolved_ips" | grep -q "^$ip$"; then
-            unblock_ip "$ip"
-        fi
-    done <<< "$old_ips"
-
-    local new_ips_json
-    new_ips_json=$(echo "$resolved_ips" | jq -R . | jq -s .)
-    echo "$state" | jq --arg domain "$domain" --arg type "$block_type" --arg utime "$unblock_time" --argjson ips "$new_ips_json" \
-        '.domains[$domain] = {ips: $ips, type: $type, unblockTime: $utime}'
+    log "Info: $ip not found in firewall - nothing to unblock"
+    return 0
 }
 
 # -------------------------------------------------------------------------
-# Periodic Refresh Mode
+# Unblocking Logic (Manual)
 # -------------------------------------------------------------------------
-if $REFRESH; then
-    log "Info: Running periodic domain refresh and timeout check"
-    state=$(get_state)
-    now=$(date +%s)
-    changed=false
+process_unblock() {
+    local state_file="$1"
+    
+    if [[ ! -f "$state_file" ]]; then
+        log "Error: State file $state_file not found"
+        exit 1
+    fi
 
-    # Check IP timeouts
-    ip_keys=$(echo "$state" | jq -r '.ips | keys | .[]' 2>/dev/null || true)
-    log "Debug: Checking $(echo "$ip_keys" | wc -l | tr -d ' ') IPs for timeout"
-    for ip in $ip_keys; do
-        ip_data=$(echo "$state" | jq -c ".ips[\"$ip\"]")
-        type=$(echo "$ip_data" | jq -r '.type')
-        unblock_time=$(echo "$ip_data" | jq -r '.unblockTime')
-        
-        if [[ "$type" == "temp" && "$unblock_time" != "Never" ]]; then
-            unblock_ts=$(date -d "$unblock_time" +%s 2>/dev/null || echo 0)
-            if [[ $now -ge $unblock_ts ]]; then
-                log "Info: IP $ip has expired (unblock_time: $unblock_time), removing from block list"
-                unblock_ip "$ip"
-                state=$(echo "$state" | jq "del(.ips[\"$ip\"])")
-                changed=true
-            else
-                log "Debug: IP $ip still valid until $unblock_time"
-            fi
-        fi
+    log "Info: Processing manual unblock using state file: $state_file"
+    
+    local target
+    target=$(jq -r '.target' "$state_file")
+    local ips
+    ips=$(jq -r '.ips[]' "$state_file")
+
+    for ip in $ips; do
+        unblock_ip "$ip"
     done
 
-    # Check Domain timeouts and refresh
-    domain_keys=$(echo "$state" | jq -r '.domains | keys | .[]' 2>/dev/null || true)
-    log "Debug: Checking $(echo "$domain_keys" | wc -l | tr -d ' ') domains for timeout and refresh"
-    for domain in $domain_keys; do
-        domain_data=$(echo "$state" | jq -c ".domains[\"$domain\"]")
-        type=$(echo "$domain_data" | jq -r '.type')
-        unblock_time=$(echo "$domain_data" | jq -r '.unblockTime')
-        
-        if [[ "$type" == "temp" && "$unblock_time" != "Never" ]]; then
-            unblock_ts=$(date -d "$unblock_time" +%s 2>/dev/null || echo 0)
-            if [[ $now -ge $unblock_ts ]]; then
-                log "Info: Domain $domain has expired (unblock_time: $unblock_time), removing from block list"
-                domain_ips=$(echo "$domain_data" | jq -r '.ips[]' 2>/dev/null || true)
-                for ip in $domain_ips; do
-                    unblock_ip "$ip"
-                done
-                state=$(echo "$state" | jq "del(.domains[\"$domain\"])")
-                changed=true
-                continue
-            else
-                log "Debug: Domain $domain still valid until $unblock_time"
-            fi
-        fi
-        
-        state=$(update_domain "$domain" "$type" "$unblock_time" "$state")
-        changed=true
-    done
-
-    if $changed; then
-        log "Debug: Saving updated state to $STATE_FILE"
-        save_state "$state"
-    fi
-    
-    # Check if state is empty and unload refresh daemon if so
-    if echo "$state" | jq -e '.domains == {} and .ips == {}' > /dev/null 2>&1; then
-        log "State is empty, unloading refresh daemon"
-        systemctl stop "$REFRESH_TIMER" 2>/dev/null || log "Warning: Failed to unload refresh daemon (may not be loaded)"
-    else
-        log "Refresh cycle completed. Active blocks: $(echo "$state" | jq -r '.domains | length') domains, $(echo "$state" | jq -r '.ips | length') IPs"
-    fi
-    
+    log "Info: Unblocked all IPs for target: $target"
+    rm -f "$state_file"
+    log "Info: Removed state file: $state_file"
     exit 0
-fi
+}
 
 # -------------------------------------------------------------------------
 # Argument Extraction
 # -------------------------------------------------------------------------
+
 extract_match() {
     local value="$1"
     local ip_regex='([0-9]{1,3}(\.[0-9]{1,3}){3})'
-    local domain_regex='https?://([^:/]+)'
+    local domain_regex='(([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,})'
 
     if [[ $value =~ $ip_regex ]]; then
         echo "${BASH_REMATCH[1]}"
@@ -283,12 +209,15 @@ extract_destination() {
     local input="$1"
     local arg
 
-    while read -r arg; do
+    if [[ "$OS_NAME" == "Darwin" ]]; then
+        extract_match "$input"
+    elif [[ "$OS_NAME" == "Linux" ]]; then
+        while read -r arg; do
             if extract_match "$arg"; then
                 return
             fi
         done < <(jq -r '.[]' <<< "$input")
-    return 1
+    fi
 }
 
 # -------------------------------------------------------------------------
@@ -296,114 +225,67 @@ extract_destination() {
 # -------------------------------------------------------------------------
 block_destination() {
     local target="$1"
-    local duration="${2:-$UNBLOCK_DURATION}"
-    local state
-    state=$(get_state)
-    local unblock_time="Never"
-    local type="perm"
+    local resolved_ips=()
     
-    log "Info: Initiating block for $target (Duration: ${duration}s)"
-    log "Debug: State before block: $(echo "$state" | jq -c '.')"
-    
-    if [[ $duration -gt 0 ]]; then
-        unblock_time=$(date -d "+${duration} seconds" +"%Y-%m-%d %H:%M:%S")
-        type="temp"
-    fi
+    log "Info: Initiating permanent block for $target"
     
     if [[ "$target" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || [[ "$target" =~ : ]]; then
-        block_ip "$target" "Manual" "$unblock_time"
-        state=$(echo "$state" | jq --arg ip "$target" --arg type "$type" --arg utime "$unblock_time" \
-            '.ips[$ip] = {type: $type, unblockTime: $utime}')
+        block_ip "$target" "Manual"
+        resolved_ips+=("$target")
     else
-        state=$(update_domain "$target" "$type" "$unblock_time" "$state")
+        local ips
+        ips=$(resolve_domain "$target" || echo "")
+        while IFS= read -r ip; do
+            [[ -z "$ip" ]] && continue
+            block_ip "$ip" "$target"
+            resolved_ips+=("$ip")
+        done <<< "$ips"
     fi
     
-    save_state "$state"
-    log "Debug: State after block: $(echo "$state" | jq -c '.')"
+    # Create immutable state file for this block
+    local safe_target=$(echo "$target" | tr '/:' '_')
+    local state_file="${STATE_DIR}/block_${safe_target}_$(date +%s).json"
     
-    if ! systemctl is-active -q "$REFRESH_TIMER"; then
-        log "Info: Loading refresh daemon at $REFRESH_TIMER"
-        systemctl start "$REFRESH_TIMER" 2>/dev/null || log "Warning: Failed to load refresh daemon"
-    fi
-}
-
-# -------------------------------------------------------------------------
-# Notification Logic
-# -------------------------------------------------------------------------
-confirm_action() {
-    local action="$1"
-    local message="$2"
+    printf '{"target": "%s", "ips": %s, "timestamp": "%s"}\n' \
+        "$target" \
+        "$(printf "%s\n" "${resolved_ips[@]}" | jq -R . | jq -s .)" \
+        "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" > "$state_file"
     
-    log "DEBUG: Requesting user confirmation for: $action"
-    if [[ "$OS_NAME" == "Linux" ]]; then
-        local user=$(who | awk '{print $1}' | head -n 1)
-        local uid=$(id -u "$user")
-        if sudo -u "$user" DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
-            zenity --question --title="Wazuh DLP Confirmation" --text="$message" --ok-label="$action" --cancel-label="Cancel" --width=400 2>/dev/null; then
-            log "Info: User confirmed action: $action"
-            return 0
-        else
-            log "Info: User cancelled action: $action"
-        fi
-    fi
-    return 1
-}
-
-send_notification() {
-    local title="Wazuh-DLP Exfiltration Alert"
-    local message="$1"
-    local target="$2"
-    local action=""
-
-    log "Info: Sending user notification for event to $target"
-    if [[ "$OS_NAME" == "Linux" ]]; then
-        local user=$(who | awk '{print $1}' | head -n 1)
-        local uid=$(id -u "$user")
-        local notify_cmd=(sudo -u "$user" DISPLAY=:0 DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" notify-send --app-name=Wazuh -u critical)
-        [[ -f "$ICON_PATH" ]] && notify_cmd+=( -i "$ICON_PATH" )
-        notify_cmd+=( -A "temp=Block Temporarily" -A "perm=Block Permanently" -A "dismiss=Dismiss" "$title" "$message" )
-        action=$("${notify_cmd[@]}" 2>/dev/null)
-        if [[ -z "$action" ]]; then
-            log "No action selected. Defaulting to Temporary block" 
-            action="temp"
-        fi
-    fi
-
-    case "$action" in
-        "temp")
-            log "Info: User selected 'Block Temporarily' for $target"
-            if confirm_action "Block Temporarily" "Block $target for $UNBLOCK_DURATION seconds?"; then
-                block_destination "$target" "$UNBLOCK_DURATION"
-            fi
-            ;;
-        "perm")
-            log "Info: User selected 'Block Permanently' for $target"
-            if confirm_action "Block Permanently" "Are you sure you want to block $target permanently?"; then
-                block_destination "$target" "0"
-            fi
-            ;;
-        "dismiss")
-            log "Info: User dismissed notification for $target"
-            ;;
-    esac
+    chmod 440 "$state_file"
+    log "Info: Created state file: $state_file"
 }
 
 # -------------------------------------------------------------------------
 # Main Execution
 # -------------------------------------------------------------------------
 
-read INPUT_JSON
-SANITIZED_JSON=$(echo "$INPUT_JSON" | remove_full_log)
-EXFIL_COMMAND=$(echo "$SANITIZED_JSON" | jq -r .parameters.alert.data.audit.execve)
-RULE_ID=$(echo "$SANITIZED_JSON" | jq -r .parameters.alert.rule.id)
+# Check if unblock mode (state file passed as argument)
+if [[ $# -eq 1 ]] && [[ -f "$1" ]]; then
+    process_unblock "$1"
+fi
 
-destination=$(extract_destination "$EXFIL_COMMAND")
-
-if [[ -z "$destination" ]]; then
-    log "Error: Could not extract destination from input"
+# Otherwise, read JSON from stdin (standard block mode)
+if ! read INPUT_JSON; then
+    log "Error: No input JSON received on stdin"
     exit 0
 fi
 
-log "Info: Processing exfiltration event [Rule: $RULE_ID, Destination: $destination]"
+if [[ "$OS_NAME" == "Linux" ]]; then
+    SANITIZED_JSON=$(echo "$INPUT_JSON" | remove_full_log)
+    EXFIL_COMMAND=$(echo "$SANITIZED_JSON" | jq -r .parameters.alert.data.audit.execve)
+else
+    EXFIL_COMMAND=$(echo "$INPUT_JSON" | jq -r .parameters.alert.data.args)
+fi
 
-send_notification "Potential data exfiltration detected to $destination. Rule: $RULE_ID" "$destination"
+if [[ -z "$EXFIL_COMMAND" || "$EXFIL_COMMAND" == "null" ]]; then
+    log "Error: Could not extract exfiltration command from alert"
+    exit 0
+fi
+
+destination=$(extract_destination "$EXFIL_COMMAND")
+
+if [[ -n "$destination" ]]; then
+    block_destination "$destination"
+else
+    log "Info: No destination IP or domain found in command: $EXFIL_COMMAND"
+fi
