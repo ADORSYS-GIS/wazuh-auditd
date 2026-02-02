@@ -210,11 +210,15 @@ extract_destination() {
     local arg
 
     if [[ "$OS_NAME" == "Darwin" ]]; then
-        extract_match "$input"
+        for arg in $input; do
+            if extract_match "$arg"; then
+                return 0
+            fi
+        done
     elif [[ "$OS_NAME" == "Linux" ]]; then
         while read -r arg; do
             if extract_match "$arg"; then
-                return
+                return 0
             fi
         done < <(jq -r '.[]' <<< "$input")
     fi
