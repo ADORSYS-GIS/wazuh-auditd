@@ -52,12 +52,23 @@ command_exists() {
 }
 
 # Variables
+OS_NAME=$(uname -s)
 OSSEC_CONF_PATH="/var/ossec/etc/ossec.conf"
 BASE_URL="https://raw.githubusercontent.com/ADORSYS-GIS/wazuh-auditd/refs/heads/feat/DLP"
 CONFIG_URL="${BASE_URL}/config"
 SCRIPTS_URL="${BASE_URL}/scripts"
 SYSTEMD_DIR="/etc/systemd/system"
 BIN_DIR="/var/ossec/active-response/bin"
+SURICATA_RULE_FILE="suricata-exfiltration.rules"
+case "$OS_NAME" in
+    Linux)
+        SURICATA_YAML_PATH="/opt/wazuh/suricata/etc/suricata/suricata.yaml"
+        ;;
+    *)
+        error_message "Unsupported operating system: $OS_NAME. This script is designed for Linux systems only."
+        exit 1
+        ;;
+esac
 
 # Ensure root privileges, either directly or through sudo
 maybe_sudo() {
@@ -113,7 +124,7 @@ print_step_header 1 "Installing Dependencies"
 info_message "updating package list"
 maybe_sudo apt update > /dev/null 2>&1
 info_message "Checking dependencies"
-for dep in "auditd" "audispd-plugins" "jq"; do
+for dep in "auditd" "audispd-plugins" "jq" "yq"; do
     if command_exists "$dep"; then
         success_message "$dep already installed... Skipping installation."
         continue
@@ -159,16 +170,46 @@ maybe_sudo nft flush ruleset
 maybe_sudo nft -f /etc/nftables.conf.d/wazuh.conf
 success_message "nftables reloaded successfully."
 
-print_step_header 8 "Removing Journald Configuration"
+print_step_header 8 "Installing Suricata Rules for Exfiltration Detection"
+info_message "Backing up existing Suricata configuration..."
+if [ -f "$SURICATA_YAML_PATH" ]; then
+    maybe_sudo cp "$SURICATA_YAML_PATH" "${SURICATA_YAML_PATH}.bak" || warn_message "Failed to backup Suricata configuration. Please ensure you have a backup of your suricata.yaml before proceeding."
+    success_message "Suricata configuration backed up successfully."
+else
+    warn_message "Suricata configuration file not found at $SURICATA_YAML_PATH. Please ensure Suricata is installed and configured correctly."
+fi
+info_message "Installing Suricata Rules for Exfiltration Detection"
+maybe_sudo curl -fsSL "${CONFIG_URL}/$SURICATA_RULE_FILE" -o /opt/wazuh/suricata/var/lib/suricata/rules/$SURICATA_RULE_FILE || error_exit "Failed to install suricata rules"
+
+maybe_sudo yq -i "
+  .[\"rule-files\"] += [\"$SURICATA_RULE_FILE\"] |
+  .[\"rule-files\"] |= unique
+" "$SURICATA_YAML_PATH" || warn_message "Failed to update Suricata configuration. Please ensure suricata.yaml is configured correctly."
+success_message "Suricata rules installed successfully."
+info_message "Restarting Suricata service..."
+maybe_sudo systemctl restart suricata-wazuh > /dev/null 2>&1 || warn_message "Failed to restart Suricata service. Please ensure it is configured correctly."
+
+print_step_header 9 "Removing Journald Configuration"
 remove_journald_config
 
-print_step_header 9 "Verifying Installation"
+print_step_header 10 "Verifying Installation"
 # Validate installation
 if maybe_sudo auditctl -l | grep -q "exfil"; then
     success_message "Exfiltration rules are loaded."
 else
     warn_message "Exfiltration rules do not appear to be loaded."
 fi
+
+# Validate Suricata rules
+info_message "Verifying Suricata rules..."
+if suricata -T -c $SURICATA_YAML_PATH 2>&1 >/dev/null; then
+    success_message "Suricata rules validated."
+else
+    warn_message "Suricata rules validation failed, restoring backup."
+    maybe_sudo cp "${SURICATA_YAML_PATH}.bak" "$SURICATA_YAML_PATH" || warn_message "Failed to restore Suricata configuration backup. Please check your suricata.yaml file."
+    maybe_sudo systemctl restart suricata-wazuh > /dev/null 2>&1 || warn_message "Failed to restart Suricata service after restoring configuration. Please check your Suricata setup."
+fi
+maybe_sudo rm -f "${SURICATA_YAML_PATH}.bak" || warn_message "Failed to remove Suricata configuration backup. Please check your suricata.yaml file."
 
 # Validate scripts
 info_message "Verifying active response scripts..."
