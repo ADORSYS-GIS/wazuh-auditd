@@ -1,0 +1,35 @@
+# HTTP POST detection - focus on large uploads
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"HTTP POST Upload to External Host"; flow:established,to_server; http.method; content:"POST"; http.content_type; content:"multipart/form-data"; threshold:type limit, track by_src, count 1, seconds 300; sid:1000003; rev:4;)
+
+# Multiple POST uploads (more suspicious)
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"Multiple HTTP POST Uploads - Possible Exfiltration"; flow:established,to_server; http.method; content:"POST"; http.content_type; content:"multipart/form-data"; threshold:type threshold, track by_src, count 5, seconds 60; sid:1000005; rev:1;)
+
+# HTTPS POST uploads
+alert http $HOME_NET any -> $EXTERNAL_NET 443 (msg:"HTTPS POST Upload"; flow:established,to_server; http.method; content:"POST"; http.content_type; content:"multipart/form-data"; sid:1000006; rev:3;)
+
+# FTP uploads
+alert ftp $HOME_NET any -> $EXTERNAL_NET 21 (msg:"FTP Upload Command - Potential Data Exfiltration"; flow:established,to_server; ftp.command; content:"STOR"; nocase; fast_pattern; sid:1000201; rev:2;)
+
+# FTP data channel
+alert ftp-data $HOME_NET any -> $EXTERNAL_NET any (msg:"FTP Data Upload"; flow:established,to_server; sid:1000202; rev:3;)
+
+# SSH connections (potential SFTP)
+alert tcp $HOME_NET any -> $EXTERNAL_NET 22 (msg:"SSH Connection to External Server"; flow:established,to_server; flags:S,12; threshold:type limit, track by_src, count 1, seconds 3600; sid:1000302; rev:2;)
+
+# Cloud storage uploads
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"Dropbox Upload Detected"; flow:established,to_server; http.method; content:"POST"; http.host; content:"dropbox.com"; http.uri; content:"upload"; sid:1000701; rev:1;)
+
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"Google Drive Upload Detected"; flow:established,to_server; http.method; content:"POST"; http.host; content:"drive.google.com"; http.uri; content:"upload"; sid:1000702; rev:1;)
+
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"OneDrive Upload Detected"; flow:established,to_server; http.method; content:"POST"; http.host; content:"onedrive.live.com"; sid:1000703; rev:1;)
+
+# DNS tunneling
+alert dns $HOME_NET any -> $EXTERNAL_NET 53 (msg:"Potential DNS Tunneling - Long Query"; dns.query; isdataat:50,relative; sid:1000501; rev:1;)
+
+# Pastebin-like services
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"Pastebin Upload Detected"; flow:established,to_server; http.method; content:"POST"; http.host; content:"pastebin.com"; sid:1000801; rev:1;)
+
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"GitHub Gist Upload"; flow:established,to_server; http.method; content:"POST"; http.host; content:"gist.github.com"; sid:1000802; rev:1;)
+
+# WebDAV uploads (often used for exfiltration)
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"WebDAV PUT Request"; flow:established,to_server; http.method; content:"PUT"; sid:1000901; rev:1;)
