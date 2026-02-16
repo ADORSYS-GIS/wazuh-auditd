@@ -1,35 +1,44 @@
-# HTTP POST detection - focus on large uploads
-alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"HTTP POST Upload to External Host"; flow:established,to_server; http.method; content:"POST"; http.content_type; content:"multipart/form-data"; threshold:type limit, track by_src, count 1, seconds 300; sid:1000003; rev:4;)
+# HTTP POST detection
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"Suspicious HTTP Multipart Upload Activity"; flow:established,to_server; http.method; content:"POST"; http.content_type; content:"multipart/form-data"; threshold:type threshold, track by_src, count 3, seconds 300; classtype:policy-violation; sid:1100001; rev:2;)
 
-# Multiple POST uploads (more suspicious)
-alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"Multiple HTTP POST Uploads - Possible Exfiltration"; flow:established,to_server; http.method; content:"POST"; http.content_type; content:"multipart/form-data"; threshold:type threshold, track by_src, count 5, seconds 60; sid:1000005; rev:1;)
+# Alternative: Detect file uploads with filestore
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"Large File Upload Detected"; flow:established,to_server; http.method; content:"POST"; http.content_type; content:"multipart/form-data"; filestore; classtype:policy-violation; sid:1100002; rev:1;)
 
 # HTTPS POST uploads
-alert http $HOME_NET any -> $EXTERNAL_NET 443 (msg:"HTTPS POST Upload"; flow:established,to_server; http.method; content:"POST"; http.content_type; content:"multipart/form-data"; sid:1000006; rev:3;)
-
-# FTP uploads
-alert ftp $HOME_NET any -> $EXTERNAL_NET 21 (msg:"FTP Upload Command - Potential Data Exfiltration"; flow:established,to_server; ftp.command; content:"STOR"; nocase; fast_pattern; sid:1000201; rev:2;)
+alert tcp $HOME_NET any -> $EXTERNAL_NET 443 (msg:"Large TLS Upload to External Host"; flow:established,to_server; stream_size:server,>,15000000; threshold:type threshold, track by_src, count 2, seconds 600; classtype:policy-violation; sid:1100003; rev:1;)
 
 # FTP data channel
-alert ftp-data $HOME_NET any -> $EXTERNAL_NET any (msg:"FTP Data Upload"; flow:established,to_server; sid:1000202; rev:3;)
+alert ftp $HOME_NET any -> $EXTERNAL_NET 21 (msg:"FTP STOR Command Detected"; flow:established,to_server; ftp.command; content:"STOR"; nocase; classtype:policy-violation; sid:1100201; rev:2;)
 
 # SSH connections (potential SFTP)
-alert tcp $HOME_NET any -> $EXTERNAL_NET 22 (msg:"SSH Connection to External Server"; flow:established,to_server; flags:S,12; threshold:type limit, track by_src, count 1, seconds 3600; sid:1000302; rev:2;)
+alert tcp $HOME_NET any -> $EXTERNAL_NET 22 (msg:"Outbound SSH Connection"; flow:established,to_server; flags:S,12; threshold:type limit, track by_src, count 5, seconds 3600; classtype:policy-violation; sid:1100301; rev:2;)
 
-# Cloud storage uploads
-alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"Dropbox Upload Detected"; flow:established,to_server; http.method; content:"POST"; http.host; content:"dropbox.com"; http.uri; content:"upload"; sid:1000701; rev:1;)
+# Cloud storage - Detect by pattern instead
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"Upload to Cloud Storage Provider - Dropbox"; flow:established,to_server; http.method; content:"POST"; http.host; content:"dropbox.com"; classtype:policy-violation; sid:1100701; rev:2;)
 
-alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"Google Drive Upload Detected"; flow:established,to_server; http.method; content:"POST"; http.host; content:"drive.google.com"; http.uri; content:"upload"; sid:1000702; rev:1;)
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"Upload to Cloud Storage Provider - Google Drive"; flow:established,to_server; http.method; content:"POST"; http.host; content:"drive.google.com"; http.uri; content:"upload"; classtype:policy-violation; sid:1100702; rev:1;)
 
-alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"OneDrive Upload Detected"; flow:established,to_server; http.method; content:"POST"; http.host; content:"onedrive.live.com"; sid:1000703; rev:1;)
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"Upload to Cloud Storage Provider - OneDrive"; flow:established,to_server; http.method; content:"POST"; http.host; content:"onedrive.live.com"; classtype:policy-violation; sid:1100703; rev:1;)
 
-# DNS tunneling
-alert dns $HOME_NET any -> $EXTERNAL_NET 53 (msg:"Potential DNS Tunneling - Long Query"; dns.query; isdataat:50,relative; sid:1000501; rev:1;)
+alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"Upload to Cloud Storage Provider - Box"; flow:established,to_server; http.method; content:"POST"; http.host; content:"box.com"; http.uri; content:"upload"; classtype:policy-violation; sid:1100704; rev:1;)
 
-# Pastebin-like services
-alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"Pastebin Upload Detected"; flow:established,to_server; http.method; content:"POST"; http.host; content:"pastebin.com"; sid:1000801; rev:1;)
+# SSH to external servers (actual exfiltration risk)
+alert tcp $HOME_NET any -> !$HOME_NET 22 (msg:"SSH Connection to External Server - Potential Exfiltration Channel"; flow:established,to_server; flags:S,12; threshold:type limit, track by_src, count 1, seconds 1800; classtype:policy-violation; sid:1000302; rev:3;)
 
-alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"GitHub Gist Upload"; flow:established,to_server; http.method; content:"POST"; http.host; content:"gist.github.com"; sid:1000802; rev:1;)
+# Set SSH established flowbit for use in other rules
+alert ssh any any -> any 22 (msg:"SSH Session Established"; flow:established; flowbits:set,ssh.established; flowbits:noalert; classtype:protocol-command-decode; sid:1100309; rev:1;)
 
-# WebDAV uploads (often used for exfiltration)
-alert http $HOME_NET any -> $EXTERNAL_NET any (msg:"WebDAV PUT Request"; flow:established,to_server; http.method; content:"PUT"; sid:1000901; rev:1;)
+# Large SSH Upload to External Server
+alert tcp $HOME_NET any ->  any 22 (msg:"Large SSH Upload to External Server"; flow:established,to_server; flowbits:isset,ssh.established; stream_size:client,>,5242880; threshold:type limit, track by_src, count 1, seconds 300; classtype:policy-violation; sid:1000307; rev:2;)
+
+# Detect large data transfers over SSH (1MB threshold)
+alert tcp $HOME_NET any -> any 22 (msg:"Large Data Transfer Over SSH - Potential File Exfiltration"; flow:established,to_server; stream_size:client,>,1048576; threshold:type limit, track by_src, count 1, seconds 300; classtype:policy-violation; sid:1100311; rev:1;)
+
+# Detect SSH connections with file transfer characteristics (high upload, low download)
+alert tcp $HOME_NET any -> any 22 (msg:"SSH Connection with High Upload Volume"; flow:established; stream_size:client,>,524288; stream_size:server,<,102400; threshold:type limit, track by_src, count 1, seconds 180; classtype:policy-violation; sid:1100312; rev:1;)
+
+# Detect multiple SSH connections in short time (batch transfers)
+alert tcp $HOME_NET any -> any 22 (msg:"Multiple SSH Connections - Possible Batch File Transfer"; flow:to_server,established; threshold:type threshold, track by_src, count 3, seconds 60; classtype:policy-violation; sid:1100313; rev:1;)
+
+# Detect SSH to specific internal hosts (if you want to monitor internal transfers too)
+alert tcp $HOME_NET any -> $HOME_NET 22 (msg:"Internal SSH File Transfer Activity"; flow:established; stream_size:client,>,1048576; threshold:type limit, track by_src, count 1, seconds 300; classtype:policy-violation; sid:1100314; rev:1;)
