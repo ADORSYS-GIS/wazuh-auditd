@@ -90,16 +90,6 @@ error_exit() {
     exit 1
 }
 
-remove_systemd_dropins() {
-    UNIT_NAME="$1"
-    DROPIN_DIR="$SYSTEMD_DIR/${UNIT_NAME}.d"
-
-    if [ -d "$DROPIN_DIR" ]; then
-        warn_message "Found existing systemd drop-in directory for ${UNIT_NAME}: ${DROPIN_DIR}. Removing to ensure incoming config takes precedence."
-        maybe_sudo rm -rf "$DROPIN_DIR"
-    fi
-}
-
 remove_journald_config() {
     if maybe_sudo grep -q "<log_format>journald</log_format>" "$OSSEC_CONF_PATH"; then
         # Remove the entire journald localfile block
